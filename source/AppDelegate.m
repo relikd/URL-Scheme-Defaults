@@ -62,12 +62,30 @@ static NSMutableDictionary<NSString*, NSString*> *nameCache;
 	[s prepareAvailable];
 	return s;
 }
+- (BOOL)setBundleId:(NSString*)bundleId  {
+	OSStatus s = LSSetDefaultHandlerForURLScheme((__bridge CFStringRef)self.name, (__bridge CFStringRef)bundleId);
+	return s == 0;
+}
 /// Select app at index and set it default. Checks whether set successful. Ignores setting same id.
 - (void)setDefault:(NSUInteger)index {
 	AppId *app = self.available[index];
-	if (app == self.registered) return;
-	OSStatus s = LSSetDefaultHandlerForURLScheme((__bridge CFStringRef)self.name, (__bridge CFStringRef)app.bundleId);
-	if (s == 0) self.registered = app;
+	if (app != self.registered && [self setBundleId:app.bundleId])
+		self.registered = app;
+}
+/// Add bundle id to available if not already. Then set the default.
+- (void)setNewDefault:(NSString*)bundleId {
+	NSUInteger idx = [self.available indexOfObjectPassingTest:^BOOL(AppId * _Nonnull obj, NSUInteger idx, BOOL * _Nonnull stop) {
+		return [obj.bundleId isEqualToString:bundleId];
+	}];
+	if (idx != NSNotFound) {
+		[self setDefault:idx];
+	} else {
+		if ([self setBundleId:bundleId]) {
+			AppId *newApp = [AppId bundleId:bundleId];
+			self.available = [self.available arrayByAddingObject:newApp];
+			self.registered = newApp;
+		}
+	}
 }
 /// Gathers all registered application for scheme and inserts to available
 - (void)prepareAvailable {
@@ -89,6 +107,33 @@ static NSMutableDictionary<NSString*, NSString*> *nameCache;
 
 // ################################################################
 // #
+// #  MARK: - Modal -
+// #
+// ################################################################
+
+@interface ChangeSchemeModal : NSPanel
+@property (weak) IBOutlet NSTextField *schemeLabel;
+@property (weak) IBOutlet NSTextField *bundleIdField;
+@property (weak) Scheme* selectedScheme;
+@end
+
+@implementation ChangeSchemeModal
+- (void)setScheme:(Scheme*)scheme {
+	self.selectedScheme = scheme;
+	[self.schemeLabel setStringValue:[@"URL scheme: " stringByAppendingString:scheme.name]];
+	[self.bundleIdField setStringValue:scheme.registered.bundleId];
+}
+- (IBAction)close:(NSButton*)sender {
+	[self close];
+}
+- (IBAction)save:(NSButton*)sender {
+	[self.selectedScheme setNewDefault: self.bundleIdField.stringValue];
+	[self close];
+}
+@end
+
+// ################################################################
+// #
 // #  MARK: - Main -
 // #
 // ################################################################
@@ -96,6 +141,7 @@ static NSMutableDictionary<NSString*, NSString*> *nameCache;
 @interface AppDelegate ()
 @property (weak) IBOutlet NSWindow *window;
 @property (weak) IBOutlet NSTableView *table;
+@property (weak) IBOutlet ChangeSchemeModal *modal;
 @property (strong) NSMutableArray<Scheme*> *data;
 @end
 
@@ -114,8 +160,8 @@ static NSMutableDictionary<NSString*, NSString*> *nameCache;
 - (void)applicationDidFinishLaunching:(NSNotification *)aNotification {
 	for (NSString *urlScheme in [self readLaunchServicesSchemes]) {
 		Scheme *s = [Scheme name:urlScheme];
-		if (s.available.count > 1)
-			[self.data addObject:s];
+		// if (s.available.count > 1)
+		[self.data addObject:s];
 	}
 	[self.data sortUsingDescriptors:@[[NSSortDescriptor sortDescriptorWithKey:@"name" ascending:YES]]];
 	[self.table reloadData];
@@ -151,8 +197,13 @@ static NSMutableDictionary<NSString*, NSString*> *nameCache;
 }
 // table view data source
 - (void)tableView:(NSTableView *)tableView setObjectValue:(nullable id)object forTableColumn:(nullable NSTableColumn *)tableColumn row:(NSInteger)row {
-	NSInteger idx = [[tableView selectedCell] indexOfSelectedItem];
-	[self.data[row] setDefault:idx];
+	if ([tableColumn.identifier isEqualToString:@"colEdit"]) {
+		[self.modal setScheme:self.data[row]];
+		[tableView.window beginSheet:self.modal completionHandler:nil];
+	} else if ([tableColumn.identifier isEqualToString:@"colApp"]) {
+		NSInteger idx = [[tableView selectedCell] indexOfSelectedItem];
+		[self.data[row] setDefault:idx];
+	}
 }
 // combo box data source
 - (NSInteger)numberOfItemsInComboBoxCell:(NSComboBoxCell *)comboBoxCell {
