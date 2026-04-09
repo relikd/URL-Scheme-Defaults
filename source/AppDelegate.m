@@ -168,13 +168,44 @@ static NSMutableDictionary<NSString*, NSString*> *nameCache;
 }
 
 - (NSSet*)readLaunchServicesSchemes {
+	// system provided list of registrations. - does not seem to be complete anymore
 	NSUserDefaults *ud = [[NSUserDefaults alloc] initWithSuiteName:@"com.apple.LaunchServices/com.apple.launchservices.secure"];
 	NSMutableSet<NSString*> *allSchemes = [NSMutableSet set];
 	for (NSDictionary *handler in [ud arrayForKey:@"LSHandlers"]) {
 		NSString *scheme = handler[@"LSHandlerURLScheme"]; // LSHandlerContentType
 		if (scheme) [allSchemes addObject:scheme];
 	}
+	// enumerate all installed applications
+	for (NSURL *url in self.allApplicationURLs) {
+		NSURL *info = [[url URLByAppendingPathComponent:@"Contents"] URLByAppendingPathComponent:@"Info.plist"];
+		if ([NSFileManager.defaultManager fileExistsAtPath:info.path]) {
+			NSUserDefaults *ud = [[NSUserDefaults alloc] initWithSuiteName:info.path];
+			for (NSDictionary *registers in [ud arrayForKey:@"CFBundleURLTypes"]) {
+				for (NSString *scheme in registers[@"CFBundleURLSchemes"]) {
+					[allSchemes addObject:scheme];
+				}
+			}
+		}
+	}
 	return allSchemes;
+}
+
+- (NSArray<NSURL*>*)allApplicationURLs {
+	NSMutableArray<NSURL*> *queue = [[NSFileManager.defaultManager URLsForDirectory:NSApplicationDirectory inDomains:NSAllDomainsMask] mutableCopy];
+	NSMutableArray<NSURL*> *results = [NSMutableArray array];
+	while (queue.count > 0) {
+		NSURL *url = queue.firstObject;
+		[queue removeObjectAtIndex:0];
+		if ([url.pathExtension isEqualToString:@"app"]) {
+			[results addObject:url];
+			continue; // do not process nested content
+		}
+		NSArray *suburls = [NSFileManager.defaultManager contentsOfDirectoryAtURL:url includingPropertiesForKeys:nil options:(NSDirectoryEnumerationSkipsHiddenFiles) error:nil];
+		if (suburls) {
+			[queue addObjectsFromArray:suburls];
+		}
+	}
+	return results;
 }
 
 
@@ -221,4 +252,6 @@ static NSMutableDictionary<NSString*, NSString*> *nameCache;
 
 // Rebuild Launch Services cache
 // https://eclecticlight.co/2017/08/11/launch-services-database-problems-correcting-and-rebuilding/
-// /System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/LaunchServices.framework/Versions/A/Support/lsregister -kill -r -v -apps u
+// /System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/LaunchServices.framework/Versions/A/Support/lsregister
+// lsregister -kill -r -v -apps u
+// lsregister -dump URLSchemeBinding
